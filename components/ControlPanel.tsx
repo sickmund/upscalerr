@@ -1,6 +1,5 @@
-
 import React, { useEffect, useState } from 'react';
-import { Maximize, FileUp, Sparkles, Sliders, Scan, Scaling, Trash2, RotateCcw, X, Crop, Expand } from 'lucide-react';
+import { Maximize, FileUp, Sparkles, Sliders, Scan, Scaling, Trash2, RotateCcw, X, Crop, Expand, RefreshCw } from 'lucide-react';
 import { GenerationConfig, ExtensionSettings, AspectRatio, ImageDimensions } from '../types';
 import { ASPECT_RATIOS, IMAGE_SIZES } from '../constants';
 
@@ -115,12 +114,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   return (
     <div className="w-full lg:w-80 bg-gray-900 border-r border-gray-800 h-full flex flex-col overflow-y-auto scrollbar-hide">
-      <div className="p-6 border-b border-gray-800">
-        <h1 className="text-xl font-bold text-white flex items-center gap-2">
-          <Maximize className="w-6 h-6 text-brand-500" />
-          VistaExpand
-        </h1>
-        <p className="text-xs text-gray-500 mt-1">Pixel-Perfect Outpainting</p>
+      <div className="p-6 border-b border-gray-800 flex items-center justify-between">
+        <div>
+            <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <Maximize className="w-6 h-6 text-brand-500" />
+            VistaExpand
+            </h1>
+            <p className="text-xs text-gray-500 mt-1">Pixel-Perfect Outpainting</p>
+        </div>
       </div>
 
       <div className="flex-1 p-6 space-y-8">
@@ -153,21 +154,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
            )}
         </div>
 
+        {/* Reset Changes Button - Only shows when changes exist */}
+        {hasChanges && imageDimensions && (
+          <button
+            onClick={resetExtensions}
+            className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold uppercase tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all border border-gray-700 hover:border-gray-600"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Reset to Original
+          </button>
+        )}
+
         {/* Aspect Ratio Control */}
         <div className="space-y-3">
            <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-2">
                     <Scan className="w-4 h-4" /> Target Frame
                 </h3>
-                {hasChanges && (
-                    <button 
-                        onClick={resetExtensions}
-                        className="flex items-center gap-1 px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded text-xs transition-colors animate-in fade-in"
-                    >
-                        <RotateCcw className="w-3 h-3" />
-                        Reset Changes
-                    </button>
-                )}
            </div>
 
            <div className="grid grid-cols-3 gap-2">
@@ -195,9 +198,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
               ))}
            </div>
-           <p className="text-[10px] text-gray-500 leading-tight">
-              Select a preset or drag sliders. Use 'Reset Changes' to return to the original photo.
-           </p>
         </div>
 
         {/* Manual Sliders */}
@@ -225,7 +225,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   <span className="flex items-center gap-1.5">
                      {label}
                      {val !== 0 && (
-                       <span className={`text-[9px] px-1 rounded ${isCrop ? 'bg-red-500/20 text-red-300' : 'bg-brand-500/20 text-brand-300'}`}>
+                       <span className={`text-[9px] px-1.5 py-0.5 rounded-sm font-medium tracking-wide ${isCrop ? 'bg-red-500/20 text-red-300' : 'bg-brand-500/20 text-brand-300'}`}>
                          {isCrop ? 'CROP' : 'EXTEND'}
                        </span>
                      )}

@@ -1,25 +1,29 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageViewer } from './components/ImageViewer';
 import { ApiKeySelector } from './components/ApiKeySelector';
 import { AppState, GenerationConfig, ViewMode, ExtensionSettings } from './types';
 import { DEFAULT_PROMPT } from './constants';
 import { generateExtendedImage } from './services/geminiService';
+import { Key } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [apiKeyReady, setApiKeyReady] = useState(false);
   const [state, setState] = useState<AppState>({
     originalImage: null,
     imageDimensions: null,
     generatedImage: null,
     isLoading: false,
     error: null,
+    apiKey: localStorage.getItem('gemini_api_key') || undefined
   });
+
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [isAuthError, setIsAuthError] = useState(false);
 
   const [config, setConfig] = useState<GenerationConfig>({
     prompt: DEFAULT_PROMPT,
-    aspectRatio: 'Original', // Default to Original
+    aspectRatio: 'Original',
     upscale: '2K',
     extension: {
       top: 0,
@@ -32,24 +36,34 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Original);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // On mount, check if we have a manual key. If not, we assume seamless env var usage.
+  // We do NOT show the modal immediately. We only show it if a request FAILS.
+
+  const handleApiKeySubmit = (key: string) => {
+    localStorage.setItem('gemini_api_key', key);
+    setState(prev => ({ ...prev, apiKey: key, error: null }));
+    setShowApiKeyModal(false);
+    setIsAuthError(false);
+  };
+
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
 
   const handleResetImage = () => {
-    setState({
+    setState(prev => ({
+      ...prev,
       originalImage: null,
       imageDimensions: null,
       generatedImage: null,
       isLoading: false,
       error: null,
-    });
+    }));
     setConfig(prev => ({
       ...prev,
       aspectRatio: 'Original',
       extension: { top: 0, bottom: 0, left: 0, right: 0 }
     }));
-    // Clear file input value to allow re-uploading same file
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -73,18 +87,16 @@ const App: React.FC = () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        
-        // Load image to get dimensions
         const img = new Image();
         img.onload = () => {
-          setState({
+          setState(prev => ({
+            ...prev,
             originalImage: result,
             imageDimensions: { width: img.naturalWidth, height: img.naturalHeight },
             generatedImage: null,
             isLoading: false,
             error: null
-          });
-          // Reset extensions on new image
+          }));
           setConfig(prev => ({
             ...prev,
             aspectRatio: 'Original',
@@ -103,14 +115,15 @@ const App: React.FC = () => {
 
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
-    // Pass current dimensions to config for service usage
     const finalConfig = {
       ...config,
       originalDimensions: state.imageDimensions || undefined
     };
 
     try {
-      const generatedImage = await generateExtendedImage(state.originalImage, finalConfig);
+      // Pass state.apiKey if it exists (manual override), otherwise service uses env var
+      const generatedImage = await generateExtendedImage(state.originalImage, finalConfig, state.apiKey);
+      
       setState(prev => ({
         ...prev,
         generatedImage,
@@ -118,23 +131,30 @@ const App: React.FC = () => {
       }));
       setViewMode(ViewMode.Result);
     } catch (err: any) {
-       if (err.message && err.message.includes("Requested entity was not found")) {
-           setApiKeyReady(false); 
-           setState(prev => ({ ...prev, isLoading: false, error: "API Key session expired or invalid. Please select key again." }));
+       const errorMessage = err.message || "";
+       console.error("Generation Error:", err);
+       
+       // Check for Auth/Key errors
+       if (errorMessage.includes("400") || errorMessage.includes("403") || errorMessage.includes("API key")) {
+           setState(prev => ({ 
+               ...prev, 
+               isLoading: false, 
+               error: "Authentication Failed" 
+           }));
+           setIsAuthError(true);
+           setShowApiKeyModal(true);
        } else {
            setState(prev => ({
              ...prev,
              isLoading: false,
-             error: err.message || "An unexpected error occurred during generation."
+             error: errorMessage || "An unexpected error occurred during generation."
            }));
        }
     }
   };
 
   return (
-    <div className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans">
-      <ApiKeySelector onKeySelected={() => setApiKeyReady(true)} />
-      
+    <div className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans relative">
       <input 
         type="file" 
         ref={fileInputRef}
@@ -143,8 +163,28 @@ const App: React.FC = () => {
         className="hidden"
       />
 
+      {/* Manual API Key Trigger (Hidden unless needed, or accessed via top corner) */}
+      <div className="absolute top-4 right-4 z-50">
+        <button 
+          onClick={() => setShowApiKeyModal(true)}
+          className="bg-gray-900/50 hover:bg-gray-800 text-gray-500 hover:text-brand-400 p-2 rounded-full transition-colors backdrop-blur-sm border border-transparent hover:border-gray-700"
+          title="Configure API Key"
+        >
+          <Key className="w-4 h-4" />
+        </button>
+      </div>
+
+      {showApiKeyModal && (
+        <ApiKeySelector 
+          onApiKeySubmit={handleApiKeySubmit} 
+          currentKey={state.apiKey}
+          onClose={() => { setShowApiKeyModal(false); setIsAuthError(false); }}
+          isErrorMode={isAuthError}
+        />
+      )}
+
       {/* Main Layout */}
-      <div className={`flex w-full h-full transition-opacity duration-500 ${apiKeyReady ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+      <div className="flex w-full h-full">
         <ControlPanel 
           config={config} 
           setConfig={setConfig} 

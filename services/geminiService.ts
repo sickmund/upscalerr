@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig } from "../types";
 import { MODEL_NAME } from "../constants";
@@ -8,7 +9,8 @@ const stripBase64Prefix = (dataUrl: string) => {
 };
 
 const getMimeType = (dataUrl: string) => {
-  return dataUrl.substring(dataUrl.indexOf(':') + 1, dataUrl.indexOf(';'));
+  const match = dataUrl.match(/:(.*?);/);
+  return match ? match[1] : 'image/png';
 };
 
 // Helper to generate descriptive text based on percentage (pixels / dimension)
@@ -55,6 +57,37 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
   });
 };
 
+// Safely retrieve API key from various potential sources
+const getSystemApiKey = (): string | undefined => {
+  const candidates = [
+    typeof process !== 'undefined' ? process.env?.API_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.REACT_APP_API_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.VITE_API_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_API_KEY : undefined,
+    // @ts-ignore
+    typeof import.meta !== 'undefined' ? import.meta.env?.API_KEY : undefined,
+    // @ts-ignore
+    typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_KEY : undefined,
+  ];
+
+  const found = candidates.find(key => key && typeof key === 'string' && key.length > 0);
+  return found ? found.replace(/['"]/g, '').trim() : undefined;
+};
+
+// Retrieve Backend URL if configured
+const getBackendUrl = (): string | undefined => {
+  const candidates = [
+    typeof process !== 'undefined' ? process.env?.REACT_APP_BACKEND_URL : undefined,
+    typeof process !== 'undefined' ? process.env?.VITE_BACKEND_URL : undefined,
+    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_BACKEND_URL : undefined,
+    // @ts-ignore
+    typeof import.meta !== 'undefined' ? import.meta.env?.VITE_BACKEND_URL : undefined,
+  ];
+  
+  const found = candidates.find(url => url && typeof url === 'string' && url.length > 0);
+  return found ? found.replace(/['"]/g, '').trim() : undefined;
+}
+
 // Crop image client-side if extensions are negative
 const processImageForGeneration = async (
   originalImageStr: string,
@@ -67,9 +100,9 @@ const processImageForGeneration = async (
 }> => {
   
   const { top, bottom, left, right } = extension;
-  
-  // Check if we have any cropping (negative extensions)
-  if (top >= 0 && bottom >= 0 && left >= 0 && right >= 0) {
+  const hasCrop = top < 0 || bottom < 0 || left < 0 || right < 0;
+
+  if (!hasCrop) {
     return { 
       processedImage: originalImageStr, 
       processedExtension: extension,
@@ -83,35 +116,29 @@ const processImageForGeneration = async (
   
   if (!ctx) throw new Error("Could not create canvas context");
 
-  // Calculate crop amounts (positive value = amount to remove)
-  const cropTop = Math.max(0, -top);
-  const cropBottom = Math.max(0, -bottom);
-  const cropLeft = Math.max(0, -left);
-  const cropRight = Math.max(0, -right);
+  const cropTop = top < 0 ? Math.abs(top) : 0;
+  const cropBottom = bottom < 0 ? Math.abs(bottom) : 0;
+  const cropLeft = left < 0 ? Math.abs(left) : 0;
+  const cropRight = right < 0 ? Math.abs(right) : 0;
 
-  // Calculate new dimensions of the base image
   const newWidth = originalDims.width - cropLeft - cropRight;
   const newHeight = originalDims.height - cropTop - cropBottom;
 
-  if (newWidth <= 0 || newHeight <= 0) {
-    throw new Error("Cropping removed the entire image");
+  if (newWidth <= 10 || newHeight <= 10) {
+    throw new Error("Cropping removed the entire image. Please adjust sliders to keep some image content.");
   }
 
   canvas.width = newWidth;
   canvas.height = newHeight;
 
-  // Draw the cropped portion of the original image
-  // sourceX, sourceY, sourceWidth, sourceHeight, destX, destY, destWidth, destHeight
   ctx.drawImage(
     img,
-    cropLeft, cropTop, newWidth, newHeight,
-    0, 0, newWidth, newHeight
+    cropLeft, cropTop, newWidth, newHeight, 
+    0, 0, newWidth, newHeight               
   );
 
   const processedImage = canvas.toDataURL(getMimeType(originalImageStr));
 
-  // Return the new state. 
-  // Importantly, any side that was cropped now has an extension of 0 for the AI generation step
   return {
     processedImage,
     processedExtension: {
@@ -126,36 +153,27 @@ const processImageForGeneration = async (
 
 export const generateExtendedImage = async (
   originalImage: string,
-  config: GenerationConfig
+  config: GenerationConfig,
+  userApiKey?: string
 ): Promise<string> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found. Please select an API Key.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-
+  
   const { width: originalWidth, height: originalHeight } = config.originalDimensions || { width: 1000, height: 1000 };
 
-  // Pre-process image: Apply crops if any extensions are negative
+  // 1. Pre-process image (Crop)
   const { processedImage, processedExtension, newDims } = await processImageForGeneration(
     originalImage, 
     config.extension,
     { width: originalWidth, height: originalHeight }
   );
 
-  // Calculate final dimensions for Aspect Ratio
-  // Note: processedExtension only contains positive values now (extensions)
+  // 2. Calculate Logic
   const totalWidth = newDims.width + processedExtension.left + processedExtension.right;
   const totalHeight = newDims.height + processedExtension.top + processedExtension.bottom;
-  
   const apiAspectRatio = getClosestAspectRatio(totalWidth, totalHeight);
 
   const extensionDescriptions = [];
   const { top, bottom, left, right } = processedExtension;
-  
-  // Check if we are purely upscaling/cropping (no extensions)
-  const isPureCropOrUpscale = top === 0 && bottom === 0 && left === 0 && right === 0;
+  const isPureUpscale = top === 0 && bottom === 0 && left === 0 && right === 0;
 
   if (top > 0) extensionDescriptions.push(`${getMagnitudeDescription(top, newDims.height)} extending the scene upwards`);
   if (bottom > 0) extensionDescriptions.push(`${getMagnitudeDescription(bottom, newDims.height)} extending the scene downwards`);
@@ -163,24 +181,65 @@ export const generateExtendedImage = async (
   if (right > 0) extensionDescriptions.push(`${getMagnitudeDescription(right, newDims.width)} expanding the view to the right`);
 
   let finalPrompt = "";
-
-  if (isPureCropOrUpscale) {
-    // If we are just cropping/upscaling, strictly tell the model to maintain the content
-    finalPrompt = `Upscale this image to ${config.upscale} resolution. Maintain the exact composition and details of the provided image. Enhance clarity and texture fidelity. ${config.prompt}`;
+  if (isPureUpscale) {
+    finalPrompt = `High-fidelity upscale to ${config.upscale}. Maintain the exact composition, subject, and details of the provided image source. Enhance texture, sharpness, and lighting quality without altering the framing. ${config.prompt}`;
   } else {
-    // If we are extending
     const directionText = `Extend the image by ${extensionDescriptions.join(' and ')}.`;
     finalPrompt = `${directionText} ${config.prompt}. Ensure seamless integration with the original style, lighting, and details.`;
   }
+
+  // ---------------------------------------------------------
+  // PATH A: SERVER-SIDE (Production Mode)
+  // ---------------------------------------------------------
+  const backendUrl = getBackendUrl();
+  
+  if (backendUrl && !userApiKey) {
+    // If a backend is configured and the user didn't force a manual key, use the backend
+    try {
+      const response = await fetch(`${backendUrl}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: processedImage,
+          prompt: finalPrompt,
+          aspectRatio: apiAspectRatio,
+          upscale: config.upscale
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.imageUrl; // Expecting { imageUrl: "data:image..." }
+    } catch (err) {
+      console.error("Backend Generation Error:", err);
+      throw err;
+    }
+  }
+
+  // ---------------------------------------------------------
+  // PATH B: CLIENT-SIDE (Demo/Prototype Mode)
+  // ---------------------------------------------------------
+  
+  const apiKey = userApiKey || getSystemApiKey();
+
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please configure the API_KEY environment variable.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
       contents: {
         parts: [
-          {
-            text: finalPrompt,
-          },
+          { text: finalPrompt },
           {
             inlineData: {
               mimeType: getMimeType(processedImage),
@@ -208,6 +267,6 @@ export const generateExtendedImage = async (
     throw new Error("No image data returned from API.");
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    throw new Error(error.message || "Failed to generate image.");
+    throw error;
   }
 };

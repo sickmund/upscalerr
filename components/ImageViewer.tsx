@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { ViewMode, ImageViewerProps } from '../types';
-import { Download, AlertCircle, ZoomIn, Columns, Layout, MousePointer2 } from 'lucide-react';
+import { Download, AlertCircle, ZoomIn, Columns, Layout, ShieldAlert, ExternalLink, Check } from 'lucide-react';
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({
   originalImage,
@@ -24,8 +24,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     scale: number; // DOM pixels to Image pixels
   } | null>(null);
   
-  // Reference to the container that holds the "Total Image" (Original + Extensions)
+  // Reference to the container that holds the "Viewport"
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // New State to track loaded image resolution
+  const [resultResolution, setResultResolution] = useState<{w: number, h: number} | null>(null);
 
   const patternStyle = {
     backgroundImage: `
@@ -47,6 +50,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     return `vista-expand-${ar}-${scale}-${date}.png`;
   };
 
+  const onResultLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+     const img = e.currentTarget;
+     setResultResolution({ w: img.naturalWidth, h: img.naturalHeight });
+  };
+
   const handleDragStart = (e: React.MouseEvent, side: 'top' | 'bottom' | 'left' | 'right') => {
     e.preventDefault();
     e.stopPropagation();
@@ -55,10 +63,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     
     const rect = containerRef.current.getBoundingClientRect();
     
-    // Calculate current Total Dimensions including current extensions
+    // The container's visible width corresponds to the current "Output" Width
     const currentTotalWidth = imageDimensions.width + config.extension.left + config.extension.right;
-    // The rect.width corresponds to currentTotalWidth
-    const scale = rect.width / currentTotalWidth; // Pixels on Screen / Pixels in Image Space
+    
+    // Scale factor: How many pixels on screen equal 1 pixel in the image definition
+    const scale = rect.width / currentTotalWidth; 
 
     dragRef.current = {
       side,
@@ -79,10 +88,15 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       
       // Determine pixel change based on direction
       let deltaExtension = 0;
-      if (side === 'top') deltaExtension = -deltaScreen; // Drag Up = Increase Top (Extension), Drag Down = Decrease (Crop)
-      else if (side === 'bottom') deltaExtension = deltaScreen; // Drag Down = Increase Bottom
-      else if (side === 'left') deltaExtension = -deltaScreen; // Drag Left = Increase Left
-      else if (side === 'right') deltaExtension = deltaScreen; // Drag Right = Increase Right
+      
+      // Logic: 
+      // Dragging OUTWARDS (away from center) should Increase extension (+).
+      // Dragging INWARDS (towards center) should Decrease extension (-/Crop).
+      
+      if (side === 'top') deltaExtension = -deltaScreen;   // Move Up (negative Y) = Increase Top
+      else if (side === 'bottom') deltaExtension = deltaScreen; // Move Down (positive Y) = Increase Bottom
+      else if (side === 'left') deltaExtension = -deltaScreen;  // Move Left (negative X) = Increase Left
+      else if (side === 'right') deltaExtension = deltaScreen;  // Move Right (positive X) = Increase Right
       
       // Convert screen pixels to image pixels
       const pixelChange = Math.round(deltaExtension / scale);
@@ -91,13 +105,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       const newValue = startVal + pixelChange;
       
       // SAFETY CONSTRAINT: Ensure we don't crop the image into oblivion.
-      // Maintain at least 100px of width/height.
+      // Maintain at least 100px of total width/height for the output.
       const minSize = 100;
       let constrainedValue = newValue;
       
       if (side === 'left') {
-          // New width = W + right + newLeft. Must be >= minSize.
-          // newLeft >= minSize - W - right
+          // Total Width = W + left + right. Must be >= minSize.
+          // left >= minSize - W - right
           const minLeft = minSize - imageDimensions.width - config.extension.right;
           constrainedValue = Math.max(minLeft, newValue);
       } else if (side === 'right') {
@@ -130,6 +144,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     };
   }, [isDragging, onUpdateExtension, imageDimensions, config.extension]);
 
+  // Check if error is related to API Key to show the "Fatal Error" modal
+  const isApiKeyError = error && (
+      error.toLowerCase().includes('api key') || 
+      error.toLowerCase().includes('403') ||
+      error.toLowerCase().includes('quota') ||
+      error.toLowerCase().includes('permission')
+  );
 
   if (!originalImage && !isLoading) {
     return (
@@ -192,8 +213,40 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           </div>
         )}
 
-        {/* Error Overlay */}
-        {error && (
+        {/* API Key / Fatal Error Modal */}
+        {isApiKeyError && (
+             <div className="absolute inset-0 z-50 bg-gray-950/90 backdrop-blur-md flex flex-col items-center justify-center p-4">
+                <div className="bg-gray-900 border border-red-900/50 rounded-2xl p-8 max-w-lg w-full shadow-2xl text-center">
+                    <div className="mx-auto bg-red-900/20 w-16 h-16 rounded-full flex items-center justify-center mb-6">
+                        <ShieldAlert className="w-8 h-8 text-red-500" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-2">Configuration Error</h2>
+                    <p className="text-red-200 font-medium mb-6 bg-red-900/10 p-4 rounded-lg text-sm">
+                        {error}
+                    </p>
+                    
+                    <div className="text-left text-gray-400 text-sm space-y-3 mb-8 bg-gray-950/50 p-4 rounded-lg border border-gray-800">
+                        <p className="font-bold text-gray-300">Action Required:</p>
+                        <p>1. Go to your Cloud Provider settings (e.g., Google Cloud Run).</p>
+                        <p>2. Find the <strong>Environment Variables</strong> section.</p>
+                        <p>3. Add or Update the variable <code className="text-brand-400">API_KEY</code> (or <code className="text-brand-400">REACT_APP_API_KEY</code>) with your valid Gemini API key.</p>
+                        <p>4. Redeploy the application.</p>
+                    </div>
+
+                    <a 
+                        href="https://console.cloud.google.com/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors"
+                    >
+                        Open Cloud Console <ExternalLink className="w-4 h-4" />
+                    </a>
+                </div>
+             </div>
+        )}
+
+        {/* Standard Error Toast (Non-Fatal) */}
+        {error && !isApiKeyError && (
           <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 bg-red-500/10 border border-red-500/50 text-red-200 px-6 py-4 rounded-xl flex items-center gap-3 shadow-2xl max-w-lg fixed">
             <AlertCircle className="w-6 h-6 flex-shrink-0" />
             <p className="text-sm">{error}</p>
@@ -215,19 +268,20 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                    maxHeight: '80vh',
                    width: 'auto',
                    maxWidth: '100%',
-                   // Checkerboard background for extended areas
+                   // Checkerboard background for extended areas (the "Canvas")
                    ...patternStyle,
                    backgroundRepeat: 'repeat' 
                 }}
              >
-                {/* Calculations for Inner Image Positioning */}
+                {/* 
+                   LAYOUT STRATEGY: 
+                   The container is the "Target Viewport".
+                   The image is placed absolutely within it.
+                */}
                 {(() => {
                     const totalW = imageDimensions.width + config.extension.left + config.extension.right;
                     const totalH = imageDimensions.height + config.extension.top + config.extension.bottom;
                     
-                    // Percentages relative to container. 
-                    // Note: If cropping (e.g., left is negative), totalW is smaller than imageDimensions.width.
-                    // widthPct will be > 100%, and leftPct will be negative.
                     const widthPct = (imageDimensions.width / totalW) * 100;
                     const heightPct = (imageDimensions.height / totalH) * 100;
                     const leftPct = (config.extension.left / totalW) * 100;
@@ -243,8 +297,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                                     top: `${topPct}%`,
                                     width: `${widthPct}%`,
                                     height: `${heightPct}%`,
-                                    maxWidth: 'none', // Allow image to exceed container if cropped
-                                    maxHeight: 'none'
                                 }}
                             >
                                 <img 
@@ -255,7 +307,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                                 />
                             </div>
                             
-                            {/* Border Highlight */}
+                            {/* Border Highlight (The Viewport Border) */}
                             <div className="absolute inset-0 border-2 border-brand-500/30 pointer-events-none transition-colors group-hover/canvas:border-brand-500/50 z-10"></div>
 
                             {/* Drag Handles - Positioned on Container Edges */}
@@ -299,19 +351,30 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
 
           {/* Case 2: Result Mode */}
           {generatedImage && viewMode === ViewMode.Result && (
-             <div className="relative shadow-2xl">
+             <div className="relative shadow-2xl group">
                <img 
                  src={generatedImage} 
                  alt="Generated" 
                  className="max-h-[85vh] max-w-full object-contain rounded-lg border border-gray-800"
+                 onLoad={onResultLoad}
                />
+               
+               {/* Resolution Badge */}
+               {resultResolution && (
+                 <div className="absolute top-4 left-4 bg-black/70 text-white px-3 py-1.5 rounded-md backdrop-blur-md border border-white/10 flex items-center gap-2 text-xs font-mono shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <Check className="w-3 h-3 text-brand-400" />
+                    {resultResolution.w} x {resultResolution.h}px
+                 </div>
+               )}
+
                <a 
                  href={generatedImage} 
                  download={getFilename()}
-                 className="absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-lg backdrop-blur transition-all hover:scale-110 group"
+                 className="absolute bottom-4 right-4 bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-lg shadow-lg transition-all flex items-center gap-2"
                  title="Download Result"
                >
-                 <Download className="w-5 h-5 group-hover:text-brand-400" />
+                 <Download className="w-4 h-4" />
+                 <span className="text-sm font-bold">Download</span>
                </a>
              </div>
           )}

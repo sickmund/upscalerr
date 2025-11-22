@@ -28,6 +28,7 @@ export interface AppState {
   generatedImage: string | null;
   isLoading: boolean;
   error: string | null;
+  apiKey?: string; 
 }
 
 export enum ViewMode {
