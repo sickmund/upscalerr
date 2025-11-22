@@ -1,8 +1,9 @@
+
 import React, { useState, useRef } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageViewer } from './components/ImageViewer';
 import { ApiKeySelector } from './components/ApiKeySelector';
-import { AppState, GenerationConfig, ViewMode } from './types';
+import { AppState, GenerationConfig, ViewMode, ExtensionSettings } from './types';
 import { DEFAULT_PROMPT } from './constants';
 import { generateExtendedImage } from './services/geminiService';
 
@@ -10,6 +11,7 @@ const App: React.FC = () => {
   const [apiKeyReady, setApiKeyReady] = useState(false);
   const [state, setState] = useState<AppState>({
     originalImage: null,
+    imageDimensions: null,
     generatedImage: null,
     isLoading: false,
     error: null,
@@ -17,7 +19,7 @@ const App: React.FC = () => {
 
   const [config, setConfig] = useState<GenerationConfig>({
     prompt: DEFAULT_PROMPT,
-    aspectRatio: '16:9',
+    aspectRatio: 'Original', // Default to Original
     upscale: '2K',
     extension: {
       top: 0,
@@ -34,6 +36,32 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
+  const handleResetImage = () => {
+    setState({
+      originalImage: null,
+      imageDimensions: null,
+      generatedImage: null,
+      isLoading: false,
+      error: null,
+    });
+    setConfig(prev => ({
+      ...prev,
+      aspectRatio: 'Original',
+      extension: { top: 0, bottom: 0, left: 0, right: 0 }
+    }));
+    // Clear file input value to allow re-uploading same file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleExtensionUpdate = (updates: Partial<ExtensionSettings>) => {
+    setConfig(prev => ({
+      ...prev,
+      extension: { ...prev.extension, ...updates }
+    }));
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -44,13 +72,27 @@ const App: React.FC = () => {
       
       const reader = new FileReader();
       reader.onloadend = () => {
-        setState({
-          originalImage: reader.result as string,
-          generatedImage: null,
-          isLoading: false,
-          error: null
-        });
-        setViewMode(ViewMode.Original);
+        const result = reader.result as string;
+        
+        // Load image to get dimensions
+        const img = new Image();
+        img.onload = () => {
+          setState({
+            originalImage: result,
+            imageDimensions: { width: img.naturalWidth, height: img.naturalHeight },
+            generatedImage: null,
+            isLoading: false,
+            error: null
+          });
+          // Reset extensions on new image
+          setConfig(prev => ({
+            ...prev,
+            aspectRatio: 'Original',
+            extension: { top: 0, bottom: 0, left: 0, right: 0 }
+          }));
+          setViewMode(ViewMode.Original);
+        };
+        img.src = result;
       };
       reader.readAsDataURL(file);
     }
@@ -61,8 +103,14 @@ const App: React.FC = () => {
 
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
+    // Pass current dimensions to config for service usage
+    const finalConfig = {
+      ...config,
+      originalDimensions: state.imageDimensions || undefined
+    };
+
     try {
-      const generatedImage = await generateExtendedImage(state.originalImage, config);
+      const generatedImage = await generateExtendedImage(state.originalImage, finalConfig);
       setState(prev => ({
         ...prev,
         generatedImage,
@@ -70,10 +118,8 @@ const App: React.FC = () => {
       }));
       setViewMode(ViewMode.Result);
     } catch (err: any) {
-       // If specifically resource not found, it might be key related, but usually error message is generic
-       // If requested entity was not found, we might need to prompt for key again.
        if (err.message && err.message.includes("Requested entity was not found")) {
-           setApiKeyReady(false); // Trigger key selector again
+           setApiKeyReady(false); 
            setState(prev => ({ ...prev, isLoading: false, error: "API Key session expired or invalid. Please select key again." }));
        } else {
            setState(prev => ({
@@ -105,17 +151,20 @@ const App: React.FC = () => {
           onGenerate={handleGenerate}
           isGenerating={state.isLoading}
           onUploadClick={handleUploadClick}
-          hasImage={!!state.originalImage}
+          onResetImage={handleResetImage}
+          imageDimensions={state.imageDimensions}
         />
         
         <ImageViewer 
           originalImage={state.originalImage}
+          imageDimensions={state.imageDimensions}
           generatedImage={state.generatedImage}
           isLoading={state.isLoading}
           error={state.error}
-          extension={config.extension}
+          config={config} 
           viewMode={viewMode}
           setViewMode={setViewMode}
+          onUpdateExtension={handleExtensionUpdate}
         />
       </div>
     </div>

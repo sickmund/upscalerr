@@ -1,28 +1,32 @@
-import React, { useState, useEffect } from 'react';
-import { ViewMode, ExtensionSettings } from '../types';
-import { Download, AlertCircle, ZoomIn, Columns, Layout } from 'lucide-react';
 
-interface ImageViewerProps {
-  originalImage: string | null;
-  generatedImage: string | null;
-  isLoading: boolean;
-  error: string | null;
-  extension: ExtensionSettings;
-  viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
-}
+import React, { useRef, useState, useEffect } from 'react';
+import { ViewMode, ImageViewerProps } from '../types';
+import { Download, AlertCircle, ZoomIn, Columns, Layout, MousePointer2 } from 'lucide-react';
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({
   originalImage,
+  imageDimensions,
   generatedImage,
   isLoading,
   error,
-  extension,
+  config,
   viewMode,
-  setViewMode
+  setViewMode,
+  onUpdateExtension
 }) => {
   
-  // Checkerboard pattern for extension areas
+  // Dragging State
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{
+    side: 'top' | 'bottom' | 'left' | 'right';
+    startPos: number;
+    startVal: number;
+    scale: number; // DOM pixels to Image pixels
+  } | null>(null);
+  
+  // Reference to the container that holds the "Total Image" (Original + Extensions)
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const patternStyle = {
     backgroundImage: `
       linear-gradient(45deg, #1f2937 25%, transparent 25%), 
@@ -35,22 +39,114 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
     backgroundColor: '#111827'
   };
 
+  // Generate filename with metadata
+  const getFilename = () => {
+    const ar = config.aspectRatio.replace(':', '-');
+    const scale = config.upscale;
+    const date = new Date().toISOString().slice(0, 10);
+    return `vista-expand-${ar}-${scale}-${date}.png`;
+  };
+
+  const handleDragStart = (e: React.MouseEvent, side: 'top' | 'bottom' | 'left' | 'right') => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!containerRef.current || !imageDimensions) return;
+    
+    const rect = containerRef.current.getBoundingClientRect();
+    
+    // Calculate current Total Dimensions including current extensions
+    const currentTotalWidth = imageDimensions.width + config.extension.left + config.extension.right;
+    // The rect.width corresponds to currentTotalWidth
+    const scale = rect.width / currentTotalWidth; // Pixels on Screen / Pixels in Image Space
+
+    dragRef.current = {
+      side,
+      startPos: side === 'top' || side === 'bottom' ? e.clientY : e.clientX,
+      startVal: config.extension[side],
+      scale
+    };
+    setIsDragging(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current || !imageDimensions) return;
+      
+      const { side, startPos, startVal, scale } = dragRef.current;
+      const currentPos = side === 'top' || side === 'bottom' ? e.clientY : e.clientX;
+      const deltaScreen = currentPos - startPos;
+      
+      // Determine pixel change based on direction
+      let deltaExtension = 0;
+      if (side === 'top') deltaExtension = -deltaScreen; // Drag Up = Increase Top (Extension), Drag Down = Decrease (Crop)
+      else if (side === 'bottom') deltaExtension = deltaScreen; // Drag Down = Increase Bottom
+      else if (side === 'left') deltaExtension = -deltaScreen; // Drag Left = Increase Left
+      else if (side === 'right') deltaExtension = deltaScreen; // Drag Right = Increase Right
+      
+      // Convert screen pixels to image pixels
+      const pixelChange = Math.round(deltaExtension / scale);
+      
+      // Proposed new extension value
+      const newValue = startVal + pixelChange;
+      
+      // SAFETY CONSTRAINT: Ensure we don't crop the image into oblivion.
+      // Maintain at least 100px of width/height.
+      const minSize = 100;
+      let constrainedValue = newValue;
+      
+      if (side === 'left') {
+          // New width = W + right + newLeft. Must be >= minSize.
+          // newLeft >= minSize - W - right
+          const minLeft = minSize - imageDimensions.width - config.extension.right;
+          constrainedValue = Math.max(minLeft, newValue);
+      } else if (side === 'right') {
+          const minRight = minSize - imageDimensions.width - config.extension.left;
+          constrainedValue = Math.max(minRight, newValue);
+      } else if (side === 'top') {
+          const minTop = minSize - imageDimensions.height - config.extension.bottom;
+          constrainedValue = Math.max(minTop, newValue);
+      } else if (side === 'bottom') {
+          const minBottom = minSize - imageDimensions.height - config.extension.top;
+          constrainedValue = Math.max(minBottom, newValue);
+      }
+
+      onUpdateExtension({ [side]: constrainedValue });
+    };
+
+    const handleMouseUp = () => {
+      dragRef.current = null;
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, onUpdateExtension, imageDimensions, config.extension]);
+
+
   if (!originalImage && !isLoading) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center bg-gray-950 p-8 text-center">
         <div className="w-24 h-24 bg-gray-900 rounded-full flex items-center justify-center mb-6 border border-gray-800">
            <Layout className="w-10 h-10 text-gray-700" />
         </div>
-        <h2 className="text-2xl font-bold text-gray-200 mb-2">Upload an Image to Start</h2>
+        <h2 className="text-2xl font-bold text-gray-200 mb-2">Upload Source Image</h2>
         <p className="text-gray-500 max-w-md">
-          Expand your visuals in any direction. Use the controls on the left to configure your extension and upscaling options.
+          Start by uploading an image. Drag borders outwards to extend, or inwards to crop.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-gray-950 relative overflow-hidden">
+    <div className={`flex-1 flex flex-col h-full bg-gray-950 relative overflow-hidden ${isDragging ? 'cursor-grabbing select-none' : ''}`}>
       
       {/* Toolbar */}
       <div className="absolute top-4 right-4 z-20 flex bg-gray-900/90 backdrop-blur border border-gray-700 rounded-lg p-1 shadow-xl">
@@ -80,7 +176,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
       </div>
 
       {/* Main Canvas Area */}
-      <div className="flex-1 relative flex items-center justify-center p-8 overflow-auto bg-gray-950">
+      <div className="flex-1 relative flex items-center justify-center p-12 overflow-auto bg-gray-950">
         
         {/* Loading Overlay */}
         {isLoading && (
@@ -91,8 +187,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                    <ZoomIn className="w-8 h-8 text-brand-500 animate-pulse" />
                 </div>
              </div>
-             <h3 className="mt-6 text-xl font-medium text-white">Extending Reality...</h3>
-             <p className="text-gray-400 mt-2 text-sm">Expanding your canvas and generating details...</p>
+             <h3 className="mt-6 text-xl font-medium text-white">Generating...</h3>
+             <p className="text-gray-400 mt-2 text-sm">Processing edits and upscaling...</p>
           </div>
         )}
 
@@ -105,58 +201,99 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         )}
 
         {/* Image Display Logic */}
-        <div className="relative min-w-0 min-h-0 flex items-center justify-center">
+        <div className="relative min-w-0 min-h-0 flex items-center justify-center w-full h-full">
           
-          {/* Case 1: Editor Mode (Original + Extensions) */}
-          {(!generatedImage || viewMode === ViewMode.Original) && originalImage && (
+          {/* Case 1: Editor Mode (Original + Extensions + Crops) */}
+          {(!generatedImage || viewMode === ViewMode.Original) && originalImage && imageDimensions && (
              <div 
-                className="relative shadow-2xl transition-all duration-300"
+                ref={containerRef}
+                className="relative shadow-2xl group/canvas ring-1 ring-gray-800 overflow-hidden"
                 style={{
-                   display: 'inline-grid',
-                   // The grid tracks use 'fr' units. 
-                   // The center track (original image) is fixed at 100fr.
-                   // The side tracks scale proportionally based on slider values (0-100).
-                   // This ensures the visualization matches the extension percentage relative to the image size.
-                   gridTemplateColumns: `${extension.left}fr 100fr ${extension.right}fr`,
-                   gridTemplateRows: `${extension.top}fr 100fr ${extension.bottom}fr`,
-                   maxWidth: '100%', 
+                   // Aspect ratio based on Total Dimensions (Original + Extensions/Crops)
+                   aspectRatio: `${imageDimensions.width + config.extension.left + config.extension.right} / ${imageDimensions.height + config.extension.top + config.extension.bottom}`,
+                   height: '100%',
+                   maxHeight: '80vh',
+                   width: 'auto',
+                   maxWidth: '100%',
+                   // Checkerboard background for extended areas
+                   ...patternStyle,
+                   backgroundRepeat: 'repeat' 
                 }}
              >
-                {/* Top Row */}
-                <div style={extension.top > 0 && extension.left > 0 ? patternStyle : {}} className="opacity-50 rounded-tl-lg"></div>
-                <div style={extension.top > 0 ? patternStyle : {}} className="opacity-50 relative border-b border-brand-500/30 flex items-center justify-center">
-                   {extension.top > 0 && <span className="text-[10px] text-brand-300 font-mono bg-gray-900/80 px-1 rounded">{extension.top}%</span>}
-                </div>
-                <div style={extension.top > 0 && extension.right > 0 ? patternStyle : {}} className="opacity-50 rounded-tr-lg"></div>
+                {/* Calculations for Inner Image Positioning */}
+                {(() => {
+                    const totalW = imageDimensions.width + config.extension.left + config.extension.right;
+                    const totalH = imageDimensions.height + config.extension.top + config.extension.bottom;
+                    
+                    // Percentages relative to container. 
+                    // Note: If cropping (e.g., left is negative), totalW is smaller than imageDimensions.width.
+                    // widthPct will be > 100%, and leftPct will be negative.
+                    const widthPct = (imageDimensions.width / totalW) * 100;
+                    const heightPct = (imageDimensions.height / totalH) * 100;
+                    const leftPct = (config.extension.left / totalW) * 100;
+                    const topPct = (config.extension.top / totalH) * 100;
 
-                {/* Middle Row */}
-                <div style={extension.left > 0 ? patternStyle : {}} className="opacity-50 border-r border-brand-500/30 flex items-center justify-center">
-                   {extension.left > 0 && <span className="text-[10px] text-brand-300 font-mono bg-gray-900/80 px-1 rounded -rotate-90">{extension.left}%</span>}
-                </div>
-                
-                {/* Original Image (Center) */}
-                <div className="relative bg-gray-900 z-10">
-                   <img 
-                     src={originalImage} 
-                     alt="Original" 
-                     className="block max-h-[60vh] w-auto max-w-full object-contain border border-gray-700"
-                     style={{ maxWidth: '100%', maxHeight: '60vh' }}
-                   />
-                </div>
+                    return (
+                        <>
+                            {/* The Image itself */}
+                            <div 
+                                className="absolute bg-gray-900 shadow-lg"
+                                style={{
+                                    left: `${leftPct}%`,
+                                    top: `${topPct}%`,
+                                    width: `${widthPct}%`,
+                                    height: `${heightPct}%`,
+                                    maxWidth: 'none', // Allow image to exceed container if cropped
+                                    maxHeight: 'none'
+                                }}
+                            >
+                                <img 
+                                    src={originalImage} 
+                                    alt="Original" 
+                                    className="w-full h-full object-fill block" 
+                                    draggable={false}
+                                />
+                            </div>
+                            
+                            {/* Border Highlight */}
+                            <div className="absolute inset-0 border-2 border-brand-500/30 pointer-events-none transition-colors group-hover/canvas:border-brand-500/50 z-10"></div>
 
-                <div style={extension.right > 0 ? patternStyle : {}} className="opacity-50 border-l border-brand-500/30 flex items-center justify-center">
-                   {extension.right > 0 && <span className="text-[10px] text-brand-300 font-mono bg-gray-900/80 px-1 rounded rotate-90">{extension.right}%</span>}
-                </div>
+                            {/* Drag Handles - Positioned on Container Edges */}
+                            
+                            {/* Top Handle */}
+                            <div 
+                                className="absolute -top-3 left-0 right-0 h-6 cursor-ns-resize z-50 flex items-center justify-center opacity-0 hover:opacity-100 group-hover/canvas:opacity-100 transition-opacity"
+                                onMouseDown={(e) => handleDragStart(e, 'top')}
+                            >
+                                <div className={`w-16 h-1 rounded-full shadow-sm backdrop-blur-sm transition-colors ${config.extension.top < 0 ? 'bg-red-500' : 'bg-brand-500'}`} />
+                            </div>
 
-                {/* Bottom Row */}
-                <div style={extension.bottom > 0 && extension.left > 0 ? patternStyle : {}} className="opacity-50 rounded-bl-lg"></div>
-                <div style={extension.bottom > 0 ? patternStyle : {}} className="opacity-50 border-t border-brand-500/30 flex items-center justify-center">
-                   {extension.bottom > 0 && <span className="text-[10px] text-brand-300 font-mono bg-gray-900/80 px-1 rounded">{extension.bottom}%</span>}
-                </div>
-                <div style={extension.bottom > 0 && extension.right > 0 ? patternStyle : {}} className="opacity-50 rounded-br-lg"></div>
+                            {/* Bottom Handle */}
+                            <div 
+                                className="absolute -bottom-3 left-0 right-0 h-6 cursor-ns-resize z-50 flex items-center justify-center opacity-0 hover:opacity-100 group-hover/canvas:opacity-100 transition-opacity"
+                                onMouseDown={(e) => handleDragStart(e, 'bottom')}
+                            >
+                                <div className={`w-16 h-1 rounded-full shadow-sm backdrop-blur-sm transition-colors ${config.extension.bottom < 0 ? 'bg-red-500' : 'bg-brand-500'}`} />
+                            </div>
 
-                {/* Overlay border for the whole extended area */}
-                <div className="absolute inset-0 border-2 border-brand-500/20 pointer-events-none rounded-lg ring-1 ring-gray-900/50"></div>
+                            {/* Left Handle */}
+                            <div 
+                                className="absolute top-0 -left-3 bottom-0 w-6 cursor-ew-resize z-50 flex items-center justify-center opacity-0 hover:opacity-100 group-hover/canvas:opacity-100 transition-opacity"
+                                onMouseDown={(e) => handleDragStart(e, 'left')}
+                            >
+                                <div className={`h-16 w-1 rounded-full shadow-sm backdrop-blur-sm transition-colors ${config.extension.left < 0 ? 'bg-red-500' : 'bg-brand-500'}`} />
+                            </div>
+
+                            {/* Right Handle */}
+                            <div 
+                                className="absolute top-0 -right-3 bottom-0 w-6 cursor-ew-resize z-50 flex items-center justify-center opacity-0 hover:opacity-100 group-hover/canvas:opacity-100 transition-opacity"
+                                onMouseDown={(e) => handleDragStart(e, 'right')}
+                            >
+                                <div className={`h-16 w-1 rounded-full shadow-sm backdrop-blur-sm transition-colors ${config.extension.right < 0 ? 'bg-red-500' : 'bg-brand-500'}`} />
+                            </div>
+                        </>
+                    );
+                })()}
              </div>
           )}
 
@@ -170,10 +307,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                />
                <a 
                  href={generatedImage} 
-                 download="vista-expand-result.png"
-                 className="absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-lg backdrop-blur transition-all hover:scale-110"
+                 download={getFilename()}
+                 className="absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-lg backdrop-blur transition-all hover:scale-110 group"
+                 title="Download Result"
                >
-                 <Download className="w-5 h-5" />
+                 <Download className="w-5 h-5 group-hover:text-brand-400" />
                </a>
              </div>
           )}
