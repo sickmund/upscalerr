@@ -1,8 +1,8 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { ImageViewer } from './components/ImageViewer';
 import { ApiKeySelector } from './components/ApiKeySelector';
+import { MockPaymentModal } from './components/MockPaymentModal';
 import { AppState, GenerationConfig, ViewMode, ExtensionSettings } from './types';
 import { DEFAULT_PROMPT } from './constants';
 import { generateExtendedImage } from './services/geminiService';
@@ -19,12 +19,13 @@ const App: React.FC = () => {
   });
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isAuthError, setIsAuthError] = useState(false);
 
   const [config, setConfig] = useState<GenerationConfig>({
     prompt: DEFAULT_PROMPT,
     aspectRatio: 'Original',
-    upscale: '2K',
+    upscale: '2K', // Default to 2K (Paid) to show off the feature
     extension: {
       top: 0,
       bottom: 0,
@@ -35,9 +36,6 @@ const App: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.Original);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // On mount, check if we have a manual key. If not, we assume seamless env var usage.
-  // We do NOT show the modal immediately. We only show it if a request FAILS.
 
   const handleApiKeySubmit = (key: string) => {
     localStorage.setItem('gemini_api_key', key);
@@ -110,7 +108,23 @@ const App: React.FC = () => {
     }
   };
 
-  const handleGenerate = async () => {
+  // The Logic: Intercepts the button click.
+  // If 1K -> Go straight to generation.
+  // If 2K/4K -> Open Payment Modal first.
+  const handleGenerateRequest = () => {
+    if (config.upscale === '1K') {
+      performGeneration();
+    } else {
+      setShowPaymentModal(true);
+    }
+  };
+
+  const handlePaymentComplete = () => {
+    setShowPaymentModal(false);
+    performGeneration();
+  };
+
+  const performGeneration = async () => {
     if (!state.originalImage) return;
 
     setState(prev => ({ ...prev, isLoading: true, error: null }));
@@ -174,6 +188,7 @@ const App: React.FC = () => {
         </button>
       </div>
 
+      {/* Modals */}
       {showApiKeyModal && (
         <ApiKeySelector 
           onApiKeySubmit={handleApiKeySubmit} 
@@ -183,12 +198,21 @@ const App: React.FC = () => {
         />
       )}
 
+      {showPaymentModal && (
+        <MockPaymentModal 
+          amount="$0.99"
+          item={`High-Fidelity ${config.upscale} Upscale`}
+          onClose={() => setShowPaymentModal(false)}
+          onComplete={handlePaymentComplete}
+        />
+      )}
+
       {/* Main Layout */}
       <div className="flex w-full h-full">
         <ControlPanel 
           config={config} 
           setConfig={setConfig} 
-          onGenerate={handleGenerate}
+          onGenerate={handleGenerateRequest}
           isGenerating={state.isLoading}
           onUploadClick={handleUploadClick}
           onResetImage={handleResetImage}

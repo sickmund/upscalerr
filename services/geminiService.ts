@@ -180,12 +180,19 @@ export const generateExtendedImage = async (
   if (left > 0) extensionDescriptions.push(`${getMagnitudeDescription(left, newDims.width)} revealing more context to the left`);
   if (right > 0) extensionDescriptions.push(`${getMagnitudeDescription(right, newDims.width)} expanding the view to the right`);
 
+  // 3. Intelligent Prompt Engineering for Detail Enhancement
   let finalPrompt = "";
+  
+  // Determine strictness of detail enhancement based on target resolution
+  const detailInstruction = config.upscale !== '1K'
+    ? `Render the result in strict ${config.upscale} resolution. Significantly enhance fine details, sharpen edges, and repair any blurry or low-quality areas in the provided image source. Improve texture realism and lighting clarity while maintaining the subject identity.`
+    : `Maintain the original image style and lighting.`;
+
   if (isPureUpscale) {
-    finalPrompt = `High-fidelity upscale to ${config.upscale}. Maintain the exact composition, subject, and details of the provided image source. Enhance texture, sharpness, and lighting quality without altering the framing. ${config.prompt}`;
+    finalPrompt = `Upscale this image to ${config.upscale}. ${detailInstruction} Do not alter the framing or composition, but drastically improve the visual fidelity. ${config.prompt}`;
   } else {
     const directionText = `Extend the image by ${extensionDescriptions.join(' and ')}.`;
-    finalPrompt = `${directionText} ${config.prompt}. Ensure seamless integration with the original style, lighting, and details.`;
+    finalPrompt = `${directionText} ${config.prompt}. ${detailInstruction} Ensure the new extended areas are high-definition and blend seamlessly with the enhanced original content.`;
   }
 
   // ---------------------------------------------------------

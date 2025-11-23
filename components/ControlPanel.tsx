@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Maximize, FileUp, Sparkles, Sliders, Scan, Scaling, Trash2, RotateCcw, X, Crop, Expand, RefreshCw } from 'lucide-react';
+import { Maximize, FileUp, Sparkles, Sliders, Scan, Scaling, Trash2, RotateCcw, X, Crop, Expand, CreditCard, Crown } from 'lucide-react';
 import { GenerationConfig, ExtensionSettings, AspectRatio, ImageDimensions } from '../types';
 import { ASPECT_RATIOS, IMAGE_SIZES } from '../constants';
 
@@ -111,6 +111,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   const maxPixelRange = imageDimensions ? Math.max(imageDimensions.width, imageDimensions.height) : 1000;
   const hasChanges = activeRatio !== 'Original' || Object.values(config.extension).some(v => v !== 0);
+  
+  // Logic for Paid vs Free
+  const isPaidFeature = config.upscale !== '1K';
+  const price = "$0.99";
 
   return (
     <div className="w-full lg:w-80 bg-gray-900 border-r border-gray-800 h-full flex flex-col overflow-y-auto scrollbar-hide">
@@ -275,32 +279,45 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           })}
         </div>
 
-        {/* Upscaling */}
+        {/* Upscaling - Now with Payments */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-2">
-              <Scaling className="w-4 h-4" /> Upscaling
+              <Scaling className="w-4 h-4" /> Quality & Upscale
             </h3>
             <div className="h-px flex-1 bg-gray-800 mx-3"></div>
           </div>
           
           <div className="bg-gray-800/50 rounded-xl p-1 flex gap-1 border border-gray-800">
-             {IMAGE_SIZES.map(size => (
-               <button
-                 key={size}
-                 onClick={() => setConfig(prev => ({ ...prev, upscale: size }))}
-                 className={`flex-1 py-2 text-xs rounded-lg font-medium transition-all ${
-                   config.upscale === size
-                     ? 'bg-brand-600 text-white shadow-lg'
-                     : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                 }`}
-               >
-                 {size}
-               </button>
-             ))}
+             {IMAGE_SIZES.map(size => {
+               const isPro = size !== '1K';
+               return (
+                <button
+                  key={size}
+                  onClick={() => setConfig(prev => ({ ...prev, upscale: size }))}
+                  className={`flex-1 py-2 px-1 text-xs rounded-lg font-medium transition-all relative overflow-hidden group/btn ${
+                    config.upscale === size
+                      ? isPro ? 'bg-gradient-to-b from-amber-200 to-amber-500 text-black shadow-lg' : 'bg-brand-600 text-white shadow-lg'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  }`}
+                >
+                  <div className="flex flex-col items-center justify-center gap-0.5 relative z-10">
+                    <span className="font-bold">{size}</span>
+                    {isPro ? (
+                      <span className={`text-[9px] flex items-center gap-0.5 ${config.upscale === size ? 'text-black/80 font-bold' : 'text-amber-500'}`}>
+                        PRO <Crown className="w-2 h-2 fill-current" />
+                      </span>
+                    ) : (
+                      <span className={`text-[9px] ${config.upscale === size ? 'text-white/80' : 'text-gray-600'}`}>FREE</span>
+                    )}
+                  </div>
+                </button>
+               );
+             })}
           </div>
-          <p className="text-[10px] text-gray-500">
-            Output resolution: {config.upscale}.
+          <p className="text-[10px] text-gray-500 flex justify-between">
+            <span>Output resolution: {config.upscale}.</span>
+            {isPaidFeature && <span className="text-amber-500 font-bold">High Quality + Detail Restoration</span>}
           </p>
         </div>
 
@@ -317,15 +334,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
       </div>
 
-      {/* Action Button */}
+      {/* Action Button - Conditional Rendering for Payment */}
       <div className="p-6 border-t border-gray-800 bg-gray-900 z-10">
         <button
           onClick={onGenerate}
           disabled={!imageDimensions || isGenerating}
-          className={`w-full py-4 rounded-xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-all ${
+          className={`w-full py-4 rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-all ${
             !imageDimensions || isGenerating
               ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-              : 'bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 shadow-brand-500/20 active:scale-[0.98]'
+              : isPaidFeature 
+                ? 'bg-white text-black hover:bg-gray-100 shadow-white/10' // Apple Pay Style
+                : 'bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 shadow-brand-500/20'
           }`}
         >
           {isGenerating ? (
@@ -333,10 +352,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               <Sparkles className="w-5 h-5 animate-spin" />
               Generating...
             </>
+          ) : isPaidFeature ? (
+            <>
+               <div className="bg-black text-white px-1 rounded text-[10px] font-serif font-bold tracking-tighter border border-black">Pay</div>
+               <span className="font-medium">Pay {price}</span>
+            </>
           ) : (
             <>
               <Sparkles className="w-5 h-5" />
-              Generate
+              Generate Free
             </>
           )}
         </button>
